@@ -226,20 +226,29 @@ async function* getInternships() {
     } while(currentInternshipIdx < internships.length);
 }
 
+async function* getStudents(internship) {
+    let students = [];
+    let currStudentIdx = 0;
+
+    do {
+        const studentsTable = await getFirstVisible(page, SELECTORS.registeredStudentsTables);
+
+        students = await studentsTable.$$(SELECTORS.studentsRows);
+        if (currStudentIdx === 0)
+            console.log(`There are ${students.length} students.`);
+
+        yield students[currStudentIdx];
+        currStudentIdx++;
+    } while (currStudentIdx < students.length);
+}
+
 async function processInternship(internship) {
     let internshipName = await getFirstVisible(page, SELECTORS.internshipName);
     internshipName = await internshipName.evaluate(el => el.innerText);
 
-    let students = [];
     let allStudData = [];
-    let currStudentIdx = 0;
-    do {
+    for await (const student of getStudents()) {
         console.log("-----------------------------------------------------------")
-        const studentsTable = await getFirstVisible(page, SELECTORS.registeredStudentsTables);
-
-        // first column has student name
-        students = await studentsTable.$$(SELECTORS.studentsRows);
-        const student = students[currStudentIdx];
 
         // some student data is ONLY available here, before going to student page
         let studData = {
@@ -262,9 +271,7 @@ async function processInternship(internship) {
         );
         console.log(studData);
         allStudData.push(studData);
-
-        currStudentIdx++;
-    } while (currStudentIdx < students.length);
+    }
 
     console.log("-----------------------------------------------------------")
     await writeExcel(allStudData, internshipName);
