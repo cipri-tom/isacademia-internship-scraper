@@ -115,10 +115,10 @@ async function XHRLoading(promise) {
     return result;
 }
 
-async function getFirstVisible(node, selector, successMsg) {
+async function getFirstVisible(selector, successMsg) {
     // not working: page.waitForSelector(selector, {visible: true})
     // see https://github.com/puppeteer/puppeteer/issues/6389
-    const matches = await node.$$(selector);
+    const matches = await page.$$(selector);
     for (let match of matches)
         if (await match.isVisible()) {
             if (successMsg)
@@ -225,7 +225,7 @@ async function* getInternships() {
     let currentInternshipIdx = 0;
     let internships;
     do {
-        const internshipsTable = await getFirstVisible(page, SELECTORS.internshipsTable,
+        const internshipsTable = await getFirstVisible(SELECTORS.internshipsTable,
             currentInternshipIdx === 0 ? 'Found internship table' : undefined);
         internships = await internshipsTable.$$(SELECTORS.internships);
         if (currentInternshipIdx === 0) {
@@ -241,7 +241,7 @@ async function* getStudents(internship) {
     let currStudentIdx = 0;
 
     do {
-        const studentsTable = await getFirstVisible(page, SELECTORS.registeredStudentsTables);
+        const studentsTable = await getFirstVisible(SELECTORS.registeredStudentsTables);
 
         students = await studentsTable.$$(SELECTORS.studentsRows);
         if (currStudentIdx === 0)
@@ -253,7 +253,7 @@ async function* getStudents(internship) {
 }
 
 async function processInternship(internship) {
-    let internshipName = await getFirstVisible(page, SELECTORS.internshipName);
+    let internshipName = await getFirstVisible(SELECTORS.internshipName);
     internshipName = await internshipName.evaluate(el => el.innerText);
 
     let allStudData = [];
