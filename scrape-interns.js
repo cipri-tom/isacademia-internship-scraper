@@ -2,6 +2,7 @@ import puppeteer, { TimeoutError } from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 import ExcelJS from 'exceljs';
+import { arch } from 'os';
 
 // I hate GLOBAL variables as much as the next person
 // But in this case, it's a small script and very few risks
@@ -13,6 +14,10 @@ let browser, page;
 const INTERNSHIP_HOMEPAGE = 'https://isa.epfl.ch/imoniteur_ISAP/PORTAL23S.htm';
 const SELECTORS = {
     login: '#ww_x_username',
+    internshipsTable: 'table[name*=listeStage]',
+    internships: 'tbody > tr', // as part of previous Table
+    internshipTitle: 'td:nth-of-type(3)',
+    registeredStudents: 'td:nth-of-type(5) > a',
 }
 
 const EXPECTED_HEADERS = ['name', 'email', 'phone', 'internship', 'department', 'date'];
@@ -174,6 +179,23 @@ async function ensureLogin() {
     }
 }
 
+async function* getInternships() {
+    // again, due to single page app, we risk losing context, so we have to
+    // reselect the table at each iteration
+    let currentInternshipIdx = 0;
+    let internships;
+    do {
+        const internshipsTable = await getFirstVisible(page, SELECTORS.internshipsTable,
+            currentInternshipIdx === 0 ? 'Found internship table' : undefined);
+        internships = await internshipsTable.$$(SELECTORS.internships);
+        if (currentInternshipIdx === 0) {
+            console.log(`There are ${internships.length} internships.`);
+        }
+        yield internships[currentInternshipIdx];
+        currentInternshipIdx++;
+    } while(currentInternshipIdx < internships.length);
+}
+
 
 
 async function main() {
@@ -197,17 +219,15 @@ async function main() {
     );
     await ensureLogin();
 
-    // get the internship table and click on the number of registered students, to see them all
-    const internshipTablesSelector = 'table[name*=listeStage]';
-    const internshipTable = await getFirstVisible(page, internshipTablesSelector,
-        "Found internship table");
-    console.log('Going to registered students...')
+    for await (const internship of getInternships()) {
+        const internshipTitle = await internship.$eval(SELECTORS.internshipTitle, el => el.innerText);
+        console.log(`Going to students for ${internshipTitle}`);
 
-    const registeredStudentsSelector = 'td:nth-of-type(5) > a'
-    const registeredStudents = await internshipTable.$(registeredStudentsSelector);
-    await XHRLoading(
-        registeredStudents.click(),
-    );
+        const registeredStudents = await internship.$(SELECTORS.registeredStudents);
+        await XHRLoading(
+            registeredStudents.click()
+        );
+    }
 
     let internshipName = await getFirstVisible(page, 'table.prtl-se-TableEntete td.prtl-se-TableTitle');
     internshipName = await internshipName.evaluate(el => el.innerText);
