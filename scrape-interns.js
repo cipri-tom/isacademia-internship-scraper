@@ -45,6 +45,14 @@ const SELECTORS = {
     internshipName: 'table.prtl-se-TableEntete td.prtl-se-TableTitle',
     registeredStudentsTables: 'table.prtl-se-Table.prtl-se-affichageListPostulants',
     studentsRows: 'tbody tr',
+
+    // student personal page
+    // there are many iframes, but the shown one is in a div that ends with `_900`
+    studentDataIFrame: '[id$=_900] > iframe',
+    studentDataEmail: 'td.inscrstage-entr-infos-email',
+    studentDataPhone: 'td.inscrstage-entr-infos-tel',
+    studentFiles: 'table.prtl-se-affichage a',
+    studentReturnButton: 'div.inscrstage-entr-retour a',
 }
 
 const EXPECTED_HEADERS = ['name', 'email', 'phone', 'internship', 'department', 'date'];
@@ -121,9 +129,7 @@ async function getFirstVisible(node, selector, successMsg) {
 }
 
 async function processStudent(studData) {
-    // there are many iframes, but the shown one is in a div that ends with `_900`
-    const studentDataIFrameSelector = '[id$=_900] > iframe';
-    const studFrameElement = await page.$(studentDataIFrameSelector);
+    const studFrameElement = await page.$(SELECTORS.studentDataIFrame);
     if (!studFrameElement) {
         throw new Error(`Could not find student frame ${studFrameElement}`);
     }
@@ -138,13 +144,13 @@ async function processStudent(studData) {
         fs.mkdirSync(studDir);
     }
 
-    studData.email = await studFrame.$eval('td.inscrstage-entr-infos-email', el => el.innerText);
-    studData.phone = await studFrame.$eval('td.inscrstage-entr-infos-tel'  , el => el.innerText);
+    studData.email = await studFrame.$eval(SELECTORS.studentDataEmail, el => el.innerText);
+    studData.phone = await studFrame.$eval(SELECTORS.studentDataPhone, el => el.innerText);
 
-    const filesElements = await studFrame.$$('table.prtl-se-affichage a');
+    const filesElements = await studFrame.$$(SELECTORS.studentFiles);
     console.log('Found %d files', filesElements.length);
 
-    for (let file of filesElements) {
+    for (const file of filesElements) {
         const fileName = await file.evaluate(node => node.innerText);
         const filePath = path.join(studDir, fileName);
         if (fs.existsSync(filePath)) {
@@ -160,6 +166,7 @@ async function processStudent(studData) {
             downloadPath: studDir,
         });
 
+        // set file to download on click, and set its name
         await file.evaluate((a, fn) => {
             a.removeAttribute('target');
             a.setAttribute('download', fn);
@@ -167,10 +174,11 @@ async function processStudent(studData) {
         }, fileName);
         console.log(fileName);
 
+        // trigger the download
         await file.click();
     }
 
-    const returnButtonPromise = studFrame.$('div.inscrstage-entr-retour a');
+    const returnButtonPromise = studFrame.$(SELECTORS.studentReturnButton);
     return returnButtonPromise;
 }
 
