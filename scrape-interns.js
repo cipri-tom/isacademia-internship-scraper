@@ -1,4 +1,4 @@
-import puppeteer from 'puppeteer';
+import puppeteer, { TimeoutError } from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 import ExcelJS from 'exceljs';
@@ -8,7 +8,7 @@ import ExcelJS from 'exceljs';
 // On the flip case, it allows to not mix data and Browser elements in function parameters
 
 // used to interact with the browser page
-let page;
+let browser, page;
 
 const INTERNSHIP_HOMEPAGE = 'https://isa.epfl.ch/imoniteur_ISAP/PORTAL23S.htm';
 const SELECTORS = {
@@ -23,8 +23,7 @@ if (!destDir) {
     process.exit(1);
 }
 if (! fs.existsSync(destDir) || ! fs.lstatSync(destDir).isDirectory()) {
-    console.error('Path "%s" does not exist or is not a directory', destDir);
-    process.exit(1);
+    throw new Error(`Path ${destDir} does not exist or is not a directory)`);
 }
 
 async function writeExcel(data) {
@@ -57,17 +56,18 @@ async function writeExcel(data) {
 //      I have tried the package `pending-xhr-puppeteer`, but it's not reliable :(
 //      so you will see a few anti-patterns of random waiting here and there
 // This returns a promise that can be combined with others to wait at least this long
-async function XHR(ms) {
-    console.log('Waiting for XHR...')
+async function sleep(ms) {
+    console.log('Sleeping for XHR...')
     return new Promise(r => setTimeout(r, ms || 2000));
 }
 
 async function XHRLoading(promise) {
-    return Promise.all([
+    const [result] = await Promise.all([
         promise,
         page.waitForNavigation(),
         page.waitForNetworkIdle(),
-    ])
+    ]);
+    return result;
 }
 
 async function getFirstVisible(node, selector, successMsg) {
@@ -88,8 +88,7 @@ async function processStudent(studData) {
     const studentDataIFrameSelector = '[id$=_900] > iframe';
     const studFrameElement = await page.$(studentDataIFrameSelector);
     if (!studFrameElement) {
-        console.error('Could not find student frame', studFrameElement);
-        process.exit(1);
+        throw new Error(`Could not find student frame ${studFrameElement}`);
     }
 
     const studFrame = await studFrameElement.contentFrame();
@@ -140,46 +139,44 @@ async function processStudent(studData) {
 
 async function setupPage() {
     const browserURL = 'http://127.0.0.1:21222';
-    const browser = await puppeteer.connect({browserURL});
+    browser = await puppeteer.connect({browserURL});
     // const browser = await puppeteer.launch({headless: false});
     // const page = await browser.newPage();
 
     const pages = await browser.pages();
     if (pages.length < 2) {
-        console.error("You don't have a 2nd tab open, and we don't want to overwrite your 1st tab.")
-        process.exit(1);
+        throw new Error("You don't have a 2nd tab open, and we don't want to overwrite your 1st tab.")
     }
 
     // Setup global page variable
     page = pages[1];
     await page.setViewport({width: 1365, height: 1330}); // recommended to set some size
-    await page.setDefaultTimeout(5000);
+    await page.setDefaultTimeout(10000);
 }
 
 async function ensureLogin() {
+    console.log('Checking if logged in...');
     try {
         // throw an error if we're not logged in
         const found = await page.waitForSelector(SELECTORS.login, {timeout: 1000});
-        console.error("FAILED: You're not logged in. Log in first, in the same browser!");
         page.setContent(
             "FAILED: You're not logged in. Log in first, in the same browser!.<br/> " +
             "We will take you to the log in page in a few seconds...<br/>" +
             "After you log in, run the script again.");
-            // "sleep" a bit, so we see the message
-            await page.waitForSelector("#__inexistent__", {timeout: 10000});
-        } catch (error) {
-            // expected, didn't find, we can close the page
-            page.goto(INTERNSHIP_HOMEPAGE);
-        }
-        process.exit(1);
+        await sleep(10000);
+        await page.goto(INTERNSHIP_HOMEPAGE);
+        throw new Error("FAILED: You're not logged in. Log in first, in the same browser!");
     } catch (error) {
-        console.log("It seems you're logged in ! 👍");
+        if (error instanceof TimeoutError)
+            console.log("It seems you're logged in ! 👍");
+        else
+            throw error;
     }
 }
 
 
 
-(async () => {
+async function main() {
     // start Google Chrome from "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222
 
     // then go to https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm
@@ -261,7 +258,12 @@ async function ensureLogin() {
     await writeExcel(allStudData);
 
     console.log('DONE 🎉');
+}
 
+try {
+    await main();
+} finally {
     // without this, the script doesn't finish
-    await browser.disconnect();
-})()
+    if (browser)
+        await browser.disconnect();
+}
