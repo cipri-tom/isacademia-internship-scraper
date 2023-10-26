@@ -61,7 +61,9 @@ if (! fs.existsSync(destDir) || ! fs.lstatSync(destDir).isDirectory()) {
 async function writeExcel(data, internshipName) {
     const destFile = path.join(destDir, 'interns.xlsx');
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(destFile);
+    if (fs.existsSync(destFile)) {
+        await workbook.xlsx.readFile(destFile);
+    }
 
     const forbiddenChars = /[\*\?\\:\/\[\]]/g;
     const sanitizedSheetName = internshipName.replace(forbiddenChars, '-');
