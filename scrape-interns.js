@@ -2,11 +2,31 @@ import puppeteer, { TimeoutError } from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 import ExcelJS from 'exceljs';
-import { arch } from 'os';
+
+// NOTE 1:
+// Unfortunately, the portal loads pages dynamically via XHR requests
+// This means that when we access an internship, or a student, we lose the context.
+// As such, any elements created thus far will be detached, and we need to select them again
+// Therefore, we adopt the `do... while()` pattern instead of `for ... of`.
+// => we iterate through integers, and re-select the table each time we come back to the page
+
+// NOTE 2:
+// the caller function takes care of navigating to the page and back, not the calee
+// because the callee cannot really know where to go back
+// This is facilitated by the fact that we have a stable menu on the right side of the page
+// or the "Back to internship" button on Student page
+
+// NOTE 3:
+// We cannot use `waitForSelector()` function, as it often selects a non-visible one
+// Yes, the page loads all data at start, and then kind of switches between their visibility
+// The IDs are generated, so we cannot reliably use them.
+// For example, there are 3-4 students tables appearing in the page, but only one is visible
+// The others represent students from previous internships
+// So instead, we have our own function, `getFirstVisible(node, selector)`
 
 // I hate GLOBAL variables as much as the next person
 // But in this case, it's a small script and very few risks
-// On the flip case, it allows to not mix data and Browser elements in function parameters
+// On the flip case, it simplifies state a lot by not passing these back and forth
 
 // used to interact with the browser page
 let browser, page;
@@ -14,10 +34,17 @@ let browser, page;
 const INTERNSHIP_HOMEPAGE = 'https://isa.epfl.ch/imoniteur_ISAP/PORTAL23S.htm';
 const SELECTORS = {
     login: '#ww_x_username',
+
+    // "all internships" page
     internshipsTable: 'table[name*=listeStage]',
     internships: 'tbody > tr', // as part of previous Table
     internshipTitle: 'td:nth-of-type(3)',
-    registeredStudents: 'td:nth-of-type(5) > a',
+    registeredStudentsNumber: 'td:nth-of-type(5) > a',
+
+    // candidates page
+    internshipName: 'table.prtl-se-TableEntete td.prtl-se-TableTitle',
+    registeredStudentsTables: 'table.prtl-se-Table.prtl-se-affichageListPostulants',
+    studentsRows: 'tbody tr',
 }
 
 const EXPECTED_HEADERS = ['name', 'email', 'phone', 'internship', 'department', 'date'];
@@ -31,9 +58,14 @@ if (! fs.existsSync(destDir) || ! fs.lstatSync(destDir).isDirectory()) {
     throw new Error(`Path ${destDir} does not exist or is not a directory)`);
 }
 
-async function writeExcel(data) {
+async function writeExcel(data, internshipName) {
+    const destFile = path.join(destDir, 'interns.xlsx');
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Interns');
+    await workbook.xlsx.readFile(destFile);
+
+    const forbiddenChars = /[\*\?\\:\/\[\]]/g;
+    const sanitizedSheetName = internshipName.replace(forbiddenChars, '-');
+    const worksheet = workbook.addWorksheet(sanitizedSheetName);
 
     const headers = Object.keys(data[0]);
     // Check if all expected headers are present
@@ -50,8 +82,6 @@ async function writeExcel(data) {
         worksheet.addRow(values);
     });
 
-    // Save the workbook to a file
-    const destFile = path.join(destDir, 'interns.xlsx');
     await workbook.xlsx.writeFile(destFile);
 
     console.log('Excel file created successfully at %s', destFile);
@@ -180,7 +210,7 @@ async function ensureLogin() {
 }
 
 async function* getInternships() {
-    // again, due to single page app, we risk losing context, so we have to
+    // See NOTE 1. due to single page app, we risk losing context, so we have to
     // reselect the table at each iteration
     let currentInternshipIdx = 0;
     let internships;
@@ -196,7 +226,49 @@ async function* getInternships() {
     } while(currentInternshipIdx < internships.length);
 }
 
+async function processInternship(internship) {
+    let internshipName = await getFirstVisible(page, SELECTORS.internshipName);
+    internshipName = await internshipName.evaluate(el => el.innerText);
 
+    let students = [];
+    let allStudData = [];
+    let currStudentIdx = 0;
+    do {
+        console.log("-----------------------------------------------------------")
+        const studentsTable = await getFirstVisible(page, SELECTORS.registeredStudentsTables);
+
+        // first column has student name
+        students = await studentsTable.$$(SELECTORS.studentsRows);
+        const student = students[currStudentIdx];
+
+        // some student data is ONLY available here, before going to student page
+        let studData = {
+            name:       await student.$eval('td:nth-of-type(1)', el => el.innerText),
+            department: await student.$eval('td:nth-of-type(2)', el => el.innerText),
+            date:       await student.$eval(`td:nth-of-type(4)`, el => el.innerText),
+            internship: internshipName,
+        }
+
+        // enter student
+        await XHRLoading(
+            (await student.$('td:first-of-type')).click()
+        );
+        // we cannot find the button ourselves because it's in a frame found by the function
+        const backToStudentsButton = await processStudent(studData);
+
+        // exit student
+        await XHRLoading(
+            backToStudentsButton.click(),
+        );
+        console.log(studData);
+        allStudData.push(studData);
+
+        currStudentIdx++;
+    } while (currStudentIdx < students.length);
+
+    console.log("-----------------------------------------------------------")
+    await writeExcel(allStudData, internshipName);
+}
 
 async function main() {
     // start Google Chrome from "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222
@@ -223,59 +295,19 @@ async function main() {
         const internshipTitle = await internship.$eval(SELECTORS.internshipTitle, el => el.innerText);
         console.log(`Going to students for ${internshipTitle}`);
 
-        const registeredStudents = await internship.$(SELECTORS.registeredStudents);
+        // go to internship
+        const registeredStudents = await internship.$(SELECTORS.registeredStudentsNumber);
         await XHRLoading(
             registeredStudents.click()
         );
+
+        await processInternship(internship);
+
+        // return from internship. We take a shortcut, and go to the main page
+        await XHRLoading(
+            page.goto(INTERNSHIP_HOMEPAGE)
+        );
     }
-
-    let internshipName = await getFirstVisible(page, 'table.prtl-se-TableEntete td.prtl-se-TableTitle');
-    internshipName = await internshipName.evaluate(el => el.innerText);
-
-    // Unfortunately, the portal loads student pages dynamically via XHR requests
-    // This means that when we access a student, we lose current context.
-    // As such, we cannot iterate through the nice `students` table, as the elements are detached when we get back
-    // => we iterate through integers, and re-select the table each time we come back to the page
-    const registeredStudentsTablesSelector = 'table.prtl-se-Table.prtl-se-affichageListPostulants';
-    const studentsSelector = 'tbody tr';
-    let students = [];
-    let allStudData = [];
-    let currStudentIdx = 0;
-    do {
-        console.log("-----------------------------------------------------------")
-        // const studentsTable = await page.waitForSelector(registeredStudentsTablesSelector, {visible: true});
-        const studentsTable = await getFirstVisible(page, registeredStudentsTablesSelector);
-
-        // first column has student name
-        students = await studentsTable.$$(studentsSelector);
-        const student = students[currStudentIdx];
-
-        // some student data is ONLY available here, before going to student page
-        let studData = {
-            name:       await student.$eval('td:nth-of-type(1)', el => el.innerText),
-            department: await student.$eval('td:nth-of-type(2)', el => el.innerText),
-            date:       await student.$eval(`td:nth-of-type(4)`, el => el.innerText),
-            internship: internshipName,
-        }
-
-        // enter student
-        await XHRLoading(
-            (await student.$('td:first-of-type')).click()
-        );
-        const backToStudentsButton = await processStudent(studData);
-
-        // exit student
-        await XHRLoading(
-            backToStudentsButton.click(),
-        );
-        console.log(studData);
-        allStudData.push(studData);
-
-        currStudentIdx++;
-    } while (currStudentIdx < students.length);
-
-    console.log("-----------------------------------------------------------")
-    await writeExcel(allStudData);
 
     console.log('DONE 🎉');
 }
