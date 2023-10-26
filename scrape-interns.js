@@ -1,8 +1,16 @@
 import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
+import ExcelJS from 'exceljs';
 
-let page; // GLOBAL variable used to interact with the browser page
+// I hate GLOBAL variables as much as the next person
+// But in this case, it's a small script and very few risks
+// On the flip case, it allows to not mix data and Browser elements in function parameters
+
+// used to interact with the browser page
+let page;
+
+const EXPECTED_HEADERS = ['name', 'email', 'phone', 'internship', 'department', 'date'];
 
 const destDir = process.argv[2];
 if (!destDir) {
@@ -14,9 +22,36 @@ if (! fs.existsSync(destDir) || ! fs.lstatSync(destDir).isDirectory()) {
     process.exit(1);
 }
 
+async function writeExcel(data) {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Interns');
+
+    const headers = Object.keys(data[0]);
+    // Check if all expected headers are present
+    const missingHeaders = EXPECTED_HEADERS.filter(header => headers.indexOf(header) < 0);
+    if (missingHeaders.length) {
+        console.error('Error in headers. Missing: ', missingHeaders);
+    }
+
+    worksheet.addRow(EXPECTED_HEADERS);
+
+    // Iterate through the data and add it to the worksheet
+    data.forEach(item => {
+        const values = EXPECTED_HEADERS.map(header => item[header]);
+        worksheet.addRow(values);
+    });
+
+    // Save the workbook to a file
+    const destFile = path.join(destDir, 'interns.xlsx');
+    await workbook.xlsx.writeFile(destFile);
+
+    console.log('Excel file created successfully at %s', destFile);
+}
+
 // NOTE: often times, data is loaded by async XHR request, which cannot be awaited for
 //      I have tried the package `pending-xhr-puppeteer`, but it's not reliable :(
 //      so you will see a few anti-patterns of random waiting here and there
+// This returns a promise that can be combined with others to wait at least this long
 async function XHR(ms) {
     console.log('Waiting for XHR...')
     return new Promise(r => setTimeout(r, ms || 2000));
@@ -35,7 +70,7 @@ async function getFirstVisible(node, selector, successMsg) {
     // see https://github.com/puppeteer/puppeteer/issues/6389
     const matches = await node.$$(selector);
     for (let match of matches)
-        if (await match.boundingBox()) {
+        if (await match.isVisible()) {
             if (successMsg)
                 console.log(successMsg);
             return match;
@@ -43,7 +78,7 @@ async function getFirstVisible(node, selector, successMsg) {
     throw new Error(`Could not find element for selector "${selector}"`);
 }
 
-async function processStudent() {
+async function processStudent(studData) {
     // there are many iframes, but the shown one is in a div that ends with `_900`
     const studentDataIFrameSelector = '[id$=_900] > iframe';
     const studFrameElement = await page.$(studentDataIFrameSelector);
@@ -55,20 +90,15 @@ async function processStudent() {
     const studFrame = await studFrameElement.contentFrame();
     await page.waitForNetworkIdle();
 
-    const studNameElement = await studFrame.$('td.inscrstage-entr-infos-etu');
-    const studName = await studNameElement.evaluate(node => node.innerText);
-    console.log('On page of student: %s', studName);
+    console.log('On page of student: %s', studData.name);
 
-    const studDir = path.join(destDir, studName);
+    const studDir = path.join(destDir, studData.name);
     if (!fs.existsSync(studDir)) {
         fs.mkdirSync(studDir);
     }
 
-    const studEmail = await studFrame.$eval('td.inscrstage-entr-infos-email'     , el => el.innerText);
-    const studPhone = await studFrame.$eval('td.inscrstage-entr-infos-tel'       , el => el.innerText);
-    const studInternship = await studFrame.$eval('td.inscrstage-entr-infos-stage', el => el.innerText);
-
-    console.log(studEmail, studPhone, studInternship);
+    studData.email = await studFrame.$eval('td.inscrstage-entr-infos-email', el => el.innerText);
+    studData.phone = await studFrame.$eval('td.inscrstage-entr-infos-tel'  , el => el.innerText);
 
     const filesElements = await studFrame.$$('table.prtl-se-affichage a');
     console.log('Found %d files', filesElements.length);
@@ -180,15 +210,20 @@ async function processStudent() {
         registeredStudents.click(),
     );
 
+    let internshipName = await getFirstVisible(page, 'table.prtl-se-TableEntete td.prtl-se-TableTitle');
+    internshipName = await internshipName.evaluate(el => el.innerText);
+
     // Unfortunately, the portal loads student pages dynamically via XHR requests
     // This means that when we access a student, we lose current context.
     // As such, we cannot iterate through the nice `students` table, as the elements are detached when we get back
     // => we iterate through integers, and re-select the table each time we come back to the page
     const registeredStudentsTablesSelector = 'table.prtl-se-Table.prtl-se-affichageListPostulants';
-    const studentsSelector = 'td:first-of-type';
+    const studentsSelector = 'tbody tr';
     let students = [];
+    let allStudData = [];
     let currStudentIdx = 0;
     do {
+        console.log("-----------------------------------------------------------")
         // const studentsTable = await page.waitForSelector(registeredStudentsTablesSelector, {visible: true});
         const studentsTable = await getFirstVisible(page, registeredStudentsTablesSelector);
 
@@ -196,22 +231,35 @@ async function processStudent() {
         students = await studentsTable.$$(studentsSelector);
         const student = students[currStudentIdx];
 
+        // some student data is ONLY available here, before going to student page
+        let studData = {
+            name:       await student.$eval('td:nth-of-type(1)', el => el.innerText),
+            department: await student.$eval('td:nth-of-type(2)', el => el.innerText),
+            date:       await student.$eval(`td:nth-of-type(4)`, el => el.innerText),
+            internship: internshipName,
+        }
+
         // enter student
         await XHRLoading(
-            student.click()
+            (await student.$('td:first-of-type')).click()
         );
-        const backToStudentsButton = await processStudent();
+        const backToStudentsButton = await processStudent(studData);
 
         // exit student
         await XHRLoading(
             backToStudentsButton.click(),
         );
+        console.log(studData);
+        allStudData.push(studData);
 
         currStudentIdx++;
     } while (currStudentIdx < students.length);
 
+    console.log("-----------------------------------------------------------")
+    await writeExcel(allStudData);
+
     console.log('DONE 🎉');
 
     // without this, the script doesn't finish
-    await browser.close();
+    await browser.disconnect();
 })()
