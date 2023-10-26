@@ -10,6 +10,11 @@ import ExcelJS from 'exceljs';
 // used to interact with the browser page
 let page;
 
+const INTERNSHIP_HOMEPAGE = 'https://isa.epfl.ch/imoniteur_ISAP/PORTAL23S.htm';
+const SELECTORS = {
+    login: '#ww_x_username',
+}
+
 const EXPECTED_HEADERS = ['name', 'email', 'phone', 'internship', 'department', 'date'];
 
 const destDir = process.argv[2];
@@ -133,24 +138,12 @@ async function processStudent(studData) {
     return returnButtonPromise;
 }
 
-(async () => {
-    // start Google Chrome from "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222
-
-    // then go to https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm
-    // and log in
-    // This way you don't need to type your password in the terminal
-    // and you can use the password manager
-    // The session remembers you've logged in, so the next script assumes this
-
-
-    // only then you can launch this
+async function setupPage() {
     const browserURL = 'http://127.0.0.1:21222';
     const browser = await puppeteer.connect({browserURL});
     // const browser = await puppeteer.launch({headless: false});
     // const page = await browser.newPage();
 
-    // Keep the first tab open to not lose your session
-    // this script works with the 2nd tab, because it allows us to have an inspector open there
     const pages = await browser.pages();
     if (pages.length < 2) {
         console.error("You don't have a 2nd tab open, and we don't want to overwrite your 1st tab.")
@@ -161,45 +154,54 @@ async function processStudent(studData) {
     page = pages[1];
     await page.setViewport({width: 1365, height: 1330}); // recommended to set some size
     await page.setDefaultTimeout(5000);
+}
 
-    // When you're on mac and using proxy, this page takes AGES to load
-    // most probably due to the proxy. The network request is pending, rather than stuck at the server
-    // So, I run this through a tunnel to bypass the proxy
-    // Update Oct 2023: it seems to work through the proxy now, no worries
-    await XHRLoading(
-        page.goto('https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm'),
-    );
+async function ensureLogin() {
     try {
         // throw an error if we're not logged in
-        const loginSelector = '#ww_x_username';
-        const found = await page.waitForSelector(loginSelector, {timeout: 1000});
+        const found = await page.waitForSelector(SELECTORS.login, {timeout: 1000});
         console.error("FAILED: You're not logged in. Log in first, in the same browser!");
         page.setContent(
             "FAILED: You're not logged in. Log in first, in the same browser!.<br/> " +
             "We will take you to the log in page in a few seconds...<br/>" +
             "After you log in, run the script again.");
-        try {
             // "sleep" a bit, so we see the message
             await page.waitForSelector("#__inexistent__", {timeout: 10000});
         } catch (error) {
             // expected, didn't find, we can close the page
-            page.goto('https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm');
+            page.goto(INTERNSHIP_HOMEPAGE);
         }
         process.exit(1);
     } catch (error) {
         console.log("It seems you're logged in ! 👍");
     }
+}
 
-    const frame = page.frames().find(frame => frame.name() === "principal");
-    // go to the "Gestion des stages (portail entreprise)"
+
+
+(async () => {
+    // start Google Chrome from "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222
+
+    // then go to https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm
+    // and log in
+    // This way you don't need to type your password in the terminal
+    // and you can use the password manager
+    // The session remembers you've logged in, so the script assumes this
+
+    // Keep the first tab open to not lose your session
+    // this script works with the 2nd tab, because it allows us to have an inspector open there
+
+    // only then you can launch this
+
+    await setupPage();
+
     await XHRLoading(
-        frame.click('td > a'),
+        page.goto(INTERNSHIP_HOMEPAGE),
     );
-    console.log('Navigated to "Gestion des stages"');
+    await ensureLogin();
 
     // get the internship table and click on the number of registered students, to see them all
     const internshipTablesSelector = 'table[name*=listeStage]';
-    // NOTE: in my tests, this "wait for visible" does not work reliably. previous method was better
     const internshipTable = await getFirstVisible(page, internshipTablesSelector,
         "Found internship table");
     console.log('Going to registered students...')
