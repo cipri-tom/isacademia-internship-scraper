@@ -184,17 +184,25 @@ async function processStudent(studData) {
 
 async function setupPage() {
     const browserURL = 'http://127.0.0.1:21222';
-    browser = await puppeteer.connect({browserURL});
-    // const browser = await puppeteer.launch({headless: false});
-    // const page = await browser.newPage();
-
-    const pages = await browser.pages();
-    if (pages.length < 2) {
-        throw new Error("You don't have a 2nd tab open, and we don't want to overwrite your 1st tab.")
+    try {
+        browser = await puppeteer.connect({browserURL});
+        // const browser = await puppeteer.launch({headless: false});
+        // const page = await browser.newPage();
+    } catch (error) {
+        console.error('🛑 Cannot connect to Chrome.\n\n⚠️ Please start Google Chrome: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222')
+        process.exit(1);
     }
 
     // Setup global page variable
-    page = pages[1];
+    const pages = await browser.pages();
+    if (pages.length == 1) {
+        console.error('🛑 Cannot find 2nd open tab.\n\n⚠️ Opening 2nd tab');
+        page = await browser.newPage();
+    }
+    else {
+        page = pages[1];
+    }
+
     await page.setViewport({width: 1365, height: 1330}); // recommended to set some size
     await page.setDefaultTimeout(10000);
 }
@@ -210,7 +218,8 @@ async function ensureLogin() {
             "After you log in, run the script again.");
         await sleep(10000);
         await page.goto(INTERNSHIP_HOMEPAGE);
-        throw new Error("FAILED: You're not logged in. Log in first, in the same browser!");
+        console.error("🛑 You're not logged in.");
+        console.error("⚠️ Please use the 1st tab to log in, and open a 2nd empty tab.");
     } catch (error) {
         if (error instanceof TimeoutError)
             console.log("It seems you're logged in ! 👍");
