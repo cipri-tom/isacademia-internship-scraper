@@ -129,6 +129,7 @@ async function getFirstVisible(selector, successMsg) {
 }
 
 async function processStudent(studData) {
+    await page.waitForNetworkIdle();
     const studFrameElement = await page.$(SELECTORS.studentDataIFrame);
     if (!studFrameElement) {
         throw new Error(`Could not find student frame ${studFrameElement}`);
@@ -323,6 +324,8 @@ async function main() {
 
         // go to internship
         const registeredStudents = await internship.$(SELECTORS.registeredStudentsNumber);
+        const numStudents = await registeredStudents.evaluate(el => el.innerText);
+        console.log(`There are ${numStudents} registered students`);
         await XHRLoading(
             registeredStudents.click()
         );
