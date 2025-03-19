@@ -74,8 +74,17 @@ async function writeExcel(data, internshipName) {
     }
 
     const forbiddenChars = /[\*\?\\:\/\[\]]/g;
-    const sanitizedSheetName = internshipName.replace(forbiddenChars, '-');
-    const worksheet = workbook.addWorksheet(sanitizedSheetName);
+    const sanitizedSheetName = internshipName.replace(forbiddenChars, '-').substring(0, 31);
+
+    // Check if the worksheet already exists
+    let worksheet = workbook.getWorksheet(sanitizedSheetName);
+    if (worksheet) {
+        // Remove the existing worksheet
+        workbook.removeWorksheet(worksheet.id);
+    }
+
+    // Add a new worksheet
+    worksheet = workbook.addWorksheet(sanitizedSheetName);
 
     const headers = Object.keys(data[0]);
     // Check if all expected headers are present
