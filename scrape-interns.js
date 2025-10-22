@@ -66,6 +66,41 @@ if (! fs.existsSync(destDir) || ! fs.lstatSync(destDir).isDirectory()) {
     throw new Error(`Path ${destDir} does not exist or is not a directory)`);
 }
 
+function sanitizeSheetName(internshipName) {
+    const forbiddenChars = /[\*\?\\:\/\[\]]/g;
+    return internshipName.replace(forbiddenChars, '-').substring(0, 31);
+}
+
+async function getExistingStudentNames(internshipName) {
+    const destFile = path.join(destDir, 'interns.xlsx');
+    if (!fs.existsSync(destFile)) {
+        return new Set();
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(destFile);
+
+    const worksheet = workbook.getWorksheet(sanitizeSheetName(internshipName));
+    if (!worksheet) {
+        return new Set();
+    }
+
+    const existingNames = new Set();
+    const nameIdx = EXPECTED_HEADERS.indexOf('name') + 1; // ExcelJS uses 1-based indexing
+
+    const rows = worksheet.getRows(2, worksheet.rowCount); // Skip header row
+    if (rows) {
+        rows.forEach(row => {
+            if (row && row.values && row.values.length > nameIdx) {
+                existingNames.add(row.values[nameIdx]);
+            }
+        });
+    }
+
+    console.log('Found %d existing records in Excel', existingNames.size);
+    return existingNames;
+}
+
 async function writeExcel(data, internshipName) {
     const destFile = path.join(destDir, 'interns.xlsx');
     const workbook = new ExcelJS.Workbook();
@@ -73,27 +108,24 @@ async function writeExcel(data, internshipName) {
         await workbook.xlsx.readFile(destFile);
     }
 
-    const forbiddenChars = /[\*\?\\:\/\[\]]/g;
-    const sanitizedSheetName = internshipName.replace(forbiddenChars, '-').substring(0, 31);
+    const sanitizedSheetName = sanitizeSheetName(internshipName);
 
     // Check if the worksheet already exists
     let worksheet = workbook.getWorksheet(sanitizedSheetName);
-    if (worksheet) {
-        // Remove the existing worksheet
-        workbook.removeWorksheet(worksheet.id);
+
+    if (!worksheet) {
+        // Add a new worksheet
+        worksheet = workbook.addWorksheet(sanitizedSheetName);
+
+        const headers = Object.keys(data[0]);
+        // Check if all expected headers are present
+        const missingHeaders = EXPECTED_HEADERS.filter(header => headers.indexOf(header) < 0);
+        if (missingHeaders.length) {
+            console.error('Error in headers. Missing: ', missingHeaders);
+        }
+
+        worksheet.addRow(EXPECTED_HEADERS);
     }
-
-    // Add a new worksheet
-    worksheet = workbook.addWorksheet(sanitizedSheetName);
-
-    const headers = Object.keys(data[0]);
-    // Check if all expected headers are present
-    const missingHeaders = EXPECTED_HEADERS.filter(header => headers.indexOf(header) < 0);
-    if (missingHeaders.length) {
-        console.error('Error in headers. Missing: ', missingHeaders);
-    }
-
-    worksheet.addRow(EXPECTED_HEADERS);
 
     // Iterate through the data and add it to the worksheet
     data.forEach(item => {
@@ -103,7 +135,7 @@ async function writeExcel(data, internshipName) {
 
     await workbook.xlsx.writeFile(destFile);
 
-    console.log('Excel file created successfully at %s', destFile);
+    console.log('Excel file updated successfully at %s', destFile);
 }
 
 // NOTE: often times, data is loaded by async XHR request, which cannot be awaited for
@@ -275,13 +307,24 @@ async function processInternship(internship) {
     let internshipName = await getFirstVisible(SELECTORS.internshipName);
     internshipName = await internshipName.evaluate(el => el.innerText);
 
+    // Get existing student names to avoid re-scraping them
+    const existingNames = await getExistingStudentNames(internshipName);
+
     let allStudData = [];
     for await (const student of getStudents()) {
         console.log("-----------------------------------------------------------")
 
         // some student data is ONLY available here, before going to student page
+        const studentName = await student.$eval('td:nth-of-type(1)', el => el.innerText);
+
+        // Skip if student already exists in Excel
+        if (existingNames.has(studentName)) {
+            console.log('Skipping existing student: %s', studentName);
+            continue;
+        }
+
         let studData = {
-            name:       await student.$eval('td:nth-of-type(1)', el => el.innerText),
+            name:       studentName,
             department: await student.$eval('td:nth-of-type(2)', el => el.innerText),
             date:       await student.$eval(`td:nth-of-type(4)`, el => el.innerText),
             internship: internshipName,
@@ -303,7 +346,11 @@ async function processInternship(internship) {
     }
 
     console.log("-----------------------------------------------------------")
-    await writeExcel(allStudData, internshipName);
+    if (allStudData.length > 0) {
+        await writeExcel(allStudData, internshipName);
+    } else {
+        console.log('No new students to add');
+    }
 }
 
 async function main() {
