@@ -2,6 +2,6 @@
   "type": "module",
   "dependencies": {
     "exceljs": "^4.4.0",
-    "puppeteer": "^19.8.2"
+    "puppeteer": "^24.26.0"
   }
 }
