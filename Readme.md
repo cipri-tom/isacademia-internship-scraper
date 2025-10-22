@@ -46,11 +46,14 @@ npm install
 
 ## Open Chrome and allow it to talk to node
 
-- start Google Chrome:
-`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222`
+1. in newer versions of Chrome, [it is not allowed to read your data](https://developer.chrome.com/blog/remote-debugging-port) when controlled externally (makes sense !!), so you need to point it to another directory. For our use case, this can be a temporary one:
+`mkdir /tmp/temp-chrome-dir`
 
-- then go to https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm
-- log in with your credentials
+2. start Google Chrome with the above dir:
+`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=21222 --user-data-dir=/tmp/temp-chrome-dir`
+
+3. go to https://isa.epfl.ch/imoniteur_ISAP/isacademia.htm
+4. log in with your credentials
 
 This way you don't need to type your password in the terminal
 and you can use the password manager.
@@ -61,6 +64,6 @@ Keep the first tab open to not lose your session. this script works with the 2nd
 
 # Runnin the script
 ```bash
-mkdir /path/to/destination/folder
-node scrape-interns.js /path/to/destination/folder
+mkdir /path/to/CVs/destination/folder
+node scrape-interns.js /path/to/CVs/destination/folder
 ```
